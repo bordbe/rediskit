@@ -1,11 +1,10 @@
-# .github/workflows/ci.yml
 name: CI
 
 on:
-  push:
-    branches: [ main, develop ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main ]  # Only on PRs targeting main
+  push:
+    branches: [ main ]  # Only when pushing directly to main
 
 jobs:
   test:
@@ -14,9 +13,6 @@ jobs:
       matrix:
         python-version: [3.8, 3.9, "3.10", "3.11"]
 
-    steps:
-    - uses: actions/checkout@v3
-    
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
       with:
@@ -43,7 +39,7 @@ jobs:
     
     - name: Run tests
       run: |
-        poetry run pytest tests/ --cov=rediskit --cov-report=xml
+        poetry run pytest tests/
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
