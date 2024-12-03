@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "rediskit"
+version = "0.1.0"
+description = ""
+authors = ["bebor <bordax@proton.me>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+hiredis = "^3.0.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
