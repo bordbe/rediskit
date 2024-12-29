@@ -1,9 +1,9 @@
 from typing import Any
 from contextlib import asynccontextmanager
+from msgpack import packb, unpackb
 
 from .connection import RedisConnectionPool
 from .config import RedisConfig
-from .transformer import Transformer
 
 import logging
 
@@ -17,46 +17,11 @@ class AsyncClient:
 
     def __init__(self, config: RedisConfig):
         self._pool = RedisConnectionPool(config)
-        self._decode = Transformer.decode
-        self._encode = Transformer.encode
 
     async def execute(self, *args) -> Any:
-        """Execute a single Redis command"""
-        command = [self._encode(arg) for arg in args]
         async with self._pool.connection() as conn:
-            response = await conn.execute_command(*command)
-            # Decode response if it's bytes
-            if isinstance(response, bytes):
-                try:
-                    return self._decode(response)
-                except Exception as e:
-                    # Return raw response if decoding fails
-                    return response
-            elif isinstance(response, (list, tuple)):
-                # Handle array responses - decode each bytes element
-                return [
-                    self._decode(item) if isinstance(item, bytes) else item
-                    for item in response
-                ]
-
-            # Return raw response for other types
+            response = await conn.execute_command(*args)
             return response
-
-    async def listen(self, channel: str, callback):
-        """Listen for messages on a channel"""
-        async with self._pool.connection() as conn:
-            await conn.execute_command('SUBSCRIBE', channel)
-            while True:
-                response = await conn._read_response()
-                logger.debug(f"response: {response}")
-                if response and len(response) == 3 and response[0] == b'message':
-                    try:
-                        channel = response[1].decode()
-                        message = self._decode(response[2])
-                        await callback(message)
-                    except Exception as e:
-                        logger.error(e)
-                        continue
 
     @asynccontextmanager
     async def pipeline(self):
@@ -81,9 +46,9 @@ class AsyncStorer(AsyncClient):
     async def set(self, key: str, value: Any, ex: int = None) -> bool:
         """Set key to hold the string value"""
         if ex:
-            result = await self.execute('SETEX', key, ex, value)
+            result = await self.execute('SETEX', key, ex, packb(value))
         else:
-            result = await self.execute('SET', key, value)
+            result = await self.execute('SET', key, packb(value))
         return result == b'OK'
 
     async def get(self, key: str, default: Any = None) -> Any:
@@ -91,23 +56,7 @@ class AsyncStorer(AsyncClient):
         result = await self.execute('GET', key)
         if result is None:
             return default
-        return result
-
-    async def mset(self, mapping: dict) -> bool:
-        """Set multiple keys to multiple values"""
-        args = []
-        for k, v in mapping.items():
-            args.extend([k, v])
-        result = await self.execute('MSET', *args)
-        return result == b'OK'
-
-    async def mget(self, keys: list) -> list:
-        """Get the values of all the given keys"""
-        results = await self.execute('MGET', *keys)
-        return [
-            item if item is None else item
-            for item in results
-        ]
+        return unpackb(result)
 
 
 class AsyncMessageBroker(AsyncClient):
@@ -118,9 +67,23 @@ class AsyncMessageBroker(AsyncClient):
     def __init__(self, config):
         super().__init__(config)
 
+    async def listen(self, channel: str, callback):
+        """Listen for messages on a channel"""
+        async with self._pool.connection() as conn:
+            await conn.execute_command('SUBSCRIBE', channel)
+            while True:
+                response = await conn._read_response()
+                if response and len(response) == 3 and response[0] == b'message':
+                    try:
+                        message = unpackb(response[2])
+                        await callback(message)
+                    except Exception as e:
+                        logger.error(e)
+                        continue
+
     async def publish(self, channel: str, message: Any) -> int:
         """Publish message to channel"""
-        result = await self.execute('PUBLISH', channel, message)
+        result = await self.execute('PUBLISH', channel, packb(message))
         return result
 
     async def subscribe(self, channel: str, callback):
