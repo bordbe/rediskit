@@ -17,8 +17,12 @@ class AsyncClient:
 
     def __init__(self, config: RedisConfig):
         self._pool = RedisConnectionPool(config)
+        self._pipe_mode = False
+        self._pipe_commands = []
 
     async def execute(self, *args) -> Any:
+        if self._pipe_mode:
+            self._pipe_commands.append(args)
         async with self._pool.connection() as conn:
             response = await conn.execute_command(*args)
             return response
@@ -26,16 +30,15 @@ class AsyncClient:
     @asynccontextmanager
     async def pipeline(self):
         """Pipeline multiple commands for batch execution"""
-        self._pipeline_mode = True
-        self._pipeline_commands = []
+        self._pipe_mode = True
         try:
             yield self
         finally:
-            self._pipeline_mode = False
             async with self._pool.connection() as conn:
-                for cmd, args in self._pipeline_commands:
-                    await conn.execute_command(cmd, *args)
-            self._pipeline_commands = []
+                for args in self._pipe_commands:
+                    await conn.execute_command(*args)
+            self._pipe_mode = False
+            self._pipe_commands = []
 
 
 class AsyncStorer(AsyncClient):
@@ -43,20 +46,19 @@ class AsyncStorer(AsyncClient):
     Redis client with storage operations
     """
 
-    async def set(self, key: str, value: Any, ex: int = None) -> bool:
-        """Set key to hold the string value"""
-        if ex:
-            result = await self.execute('SETEX', key, ex, packb(value))
-        else:
-            result = await self.execute('SET', key, packb(value))
+    async def set(self, key: str, value: Any) -> bool:
+        result = await self.execute('SET', key, packb(value))
         return result == b'OK'
 
     async def get(self, key: str, default: Any = None) -> Any:
-        """Get the value of key"""
         result = await self.execute('GET', key)
         if result is None:
             return default
         return unpackb(result)
+
+    async def setex(self, key: str, ex: int, value: Any) -> bool:
+        result = await self.execute('SETEX', key, ex, packb(value))
+        return result == b'OK'
 
 
 class AsyncMessageBroker(AsyncClient):
