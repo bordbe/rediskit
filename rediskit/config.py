@@ -7,6 +7,7 @@ class RedisConfig:
     host: str = 'localhost'
     port: int = 6379
     db: int = 0
+    unix_socket: Optional[str] = None
     password: Optional[str] = None
     max_connections: int = 50
     socket_timeout: float = 5.0

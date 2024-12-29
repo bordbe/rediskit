@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 
 from .config import RedisConfig
 from .exceptions import ConnectionError
-from .transformer import Transformer
 from .utils import SingletonMeta
 
 
@@ -20,12 +19,13 @@ class RedisConnection:
         self.port = config.port
         self.password = config.password
         self.db = config.db
-        self.socket_timeout = config.socket_timeout
+        self.unix_socket = config.unix_socket
+        self.timeout = config.socket_timeout
         self.buffer_size = config.buffer_size
 
         self._parser = Reader()
-        self._stream_reader: Optional[asyncio.StreamReader] = None
-        self._stream_writer: Optional[asyncio.StreamWriter] = None
+        self._reader: Optional[asyncio.StreamReader] = None
+        self._writer: Optional[asyncio.StreamWriter] = None
 
     def __await__(self):
         return self.init().__await__()
@@ -41,28 +41,13 @@ class RedisConnection:
         establish raw connection
         """
         try:
-            self._stream_reader, self._stream_writer = await asyncio.open_connection(
-                self.host,
-                self.port,
-            )
-            sock = self._stream_writer.get_extra_info('socket')
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            if hasattr(socket, 'TCP_KEEPIDLE'):
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
-
-            if self.password:
-                await self._send_command('AUTH', self.password)
-                response = await self._read_response()
-                if response != b'OK':
-                    raise ConnectionError("Authentication failed")
-
-            if self.db != 0:
-                await self._send_command('SELECT', str(self.db))
-                response = await self._read_response()
-                if response != b'OK':
-                    raise ConnectionError(
-                        f"Failed to select database {self.db}")
+            if self.unix_socket:
+                self._reader, self._writer = await asyncio.open_unix_connection(self.unix_socket)
+            else:
+                self._reader, self._writer = await asyncio.open_connection(self.host, self.port)
+                sock = self._writer.get_extra_info('socket')
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         except Exception as e:
             raise ConnectionError(f"Failed to connect: {e}")
 
@@ -71,8 +56,8 @@ class RedisConnection:
         send raw command
         """
         packed_cmd = pack_command(args)
-        self._stream_writer.write(packed_cmd)
-        await self._stream_writer.drain()
+        self._writer.write(packed_cmd)
+        await self._writer.drain()
 
     async def _read_response(self):
         """
@@ -82,17 +67,15 @@ class RedisConnection:
             response = self._parser.gets()
             if response is not False:
                 return response
-            data = await self._stream_reader.read(self.buffer_size)
+            data = await self._reader.read(self.buffer_size)
             if not data:
                 raise ConnectionError("Connection closed")
-            print(data)
             self._parser.feed(data)
 
     async def execute_command(self, *args) -> Any:
         """
         execute command and return response
         """
-        print("execuing command", *args)
         await self._send_command(*args)
         return await self._read_response()
 
@@ -100,9 +83,9 @@ class RedisConnection:
         """
         close connection
         """
-        if self._stream_writer:
-            self._stream_writer.close()
-            await self._stream_writer.wait_closed()
+        if self._writer:
+            self._writer.close()
+            await self._writer.wait_closed()
 
 
 class RedisConnectionPool(metaclass=SingletonMeta):
