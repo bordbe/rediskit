@@ -46,6 +46,10 @@ class AsyncStorer(AsyncClient):
     Redis client with storage operations
     """
 
+    async def keys(self, pattern: str = '*') -> list[str]:
+        result = await self.execute('KEYS', pattern)
+        return [key.decode('utf-8') for key in result]
+
     async def set(self, key: str, value: Any) -> bool:
         result = await self.execute('SET', key, packb(value))
         return result == b'OK'
